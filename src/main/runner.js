@@ -24,8 +24,9 @@ function createRunner({ store, getApi, onChange, onAuthError, onFirstSend, now =
   // check stops halfway (rate limit, crash).
   function recount(c) {
     const vals = Object.values(c.replied || {});
-    c.stats.sent = vals.filter((v) => !String(v).startsWith('error')).length;
-    c.stats.skipped = vals.length - c.stats.sent;
+    const sentNow = vals.filter((v) => !String(v).startsWith('error')).length;
+    c.stats.sent = (c.prunedSent || 0) + sentNow;
+    c.stats.skipped = (c.prunedSkipped || 0) + (vals.length - sentNow);
   }
 
   function running() {
