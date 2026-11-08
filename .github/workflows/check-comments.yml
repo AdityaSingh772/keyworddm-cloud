@@ -1,0 +1,23 @@
+# Installed by the KeywordDM app. Checks your running campaigns every 5 minutes,
+# even when your computer is off. Don't edit: the app updates this file.
+name: check-comments
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {}
+concurrency:
+  group: keyworddm
+  cancel-in-progress: false
+permissions:
+  contents: write
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check comments and send DMs
+        run: node src/cloud/cloud.js once
+        env:
+          IG_ACCESS_TOKEN: ${{ secrets.IG_ACCESS_TOKEN }}
+          KDM_KEY: ${{ secrets.KDM_KEY }}
