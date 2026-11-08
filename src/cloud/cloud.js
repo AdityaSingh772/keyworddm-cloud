@@ -30,6 +30,8 @@ function mergeCampaigns(config, state, existing = []) {
     const c = live || {
       id: cfg.id,
       replied: mem.replied || {},
+      prunedSent: mem.prunedSent || 0,
+      prunedSkipped: mem.prunedSkipped || 0,
       stats: { sent: 0, skipped: 0, replied: 0, lastCheck: null, lastError: null, ...(mem.stats || {}) },
       log: mem.log || [],
       mediaId: mem.mediaId,
@@ -45,13 +47,27 @@ function mergeCampaigns(config, state, existing = []) {
 }
 
 /** State to store for each campaign. Keeps entries for campaigns the app no longer lists. */
-function buildState(prev, campaigns, extra = {}) {
+const PRUNE_AFTER_MS = 8 * 24 * 3600e3;
+/** Forget DM records older than 8 days (their comments are past Instagram's 7-day window,
+ *  so they can never be picked again) but keep the totals. Keeps the repo small. */
+function pruneReplied(c, now) {
+  for (const [id, v] of Object.entries(c.replied || {})) {
+    const isErr = String(v).startsWith('error');
+    const at = Date.parse(isErr ? (c.errorsAt && c.errorsAt[id]) || 0 : v) || 0;
+    if (!isErr && at && now - at > PRUNE_AFTER_MS) { delete c.replied[id]; c.prunedSent = (c.prunedSent || 0) + 1; }
+  }
+}
+
+function buildState(prev, campaigns, extra = {}, now = Date.now()) {
   const state = { ...prev, ...extra, campaigns: { ...(prev.campaigns || {}) } };
   for (const c of campaigns) {
+    pruneReplied(c, now);
     state.campaigns[c.id] = {
       mediaId: c.mediaId,
       reelTimestamp: c.reelTimestamp,
       replied: c.replied,
+      prunedSent: c.prunedSent || 0,
+      prunedSkipped: c.prunedSkipped || 0,
       stats: c.stats,
       log: (c.log || []).slice(0, LOG_KEEP),
     };
@@ -117,7 +133,15 @@ async function main() {
   }
 
   let config = readEnc(CFG_PATH, key, { campaigns: [] });
-  let state = readEnc(STATE_PATH, key, { campaigns: {} });
+  let state;
+  try {
+    state = readEnc(STATE_PATH, key, { campaigns: {} });
+  } catch (e) {
+    // The app was reinstalled or set up on another Mac, so the key changed. Start a new record.
+    // Nobody gets a second DM: Instagram itself allows only one private reply per comment.
+    console.log('Old DM record was made with a different key; starting a fresh record.');
+    state = { campaigns: {} };
+  }
   let campaigns = mergeCampaigns(config, state);
   const running = () => campaigns.filter((c) => c.status === 'running');
   if (!running().length && mode === 'once' && !heartbeatDue(state)) {
@@ -220,4 +244,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { mergeCampaigns, buildState, fingerprint, heartbeatDue };
+module.exports = { mergeCampaigns, buildState, fingerprint, heartbeatDue, pruneReplied };
