@@ -153,6 +153,7 @@ async function main() {
     },
     onChange: () => {},
     onAuthError: () => { authFailed = true; },
+    fixedInterval: mode === 'watch' ? 10_000 : null, // fast mode: every 10s, whatever the reel's age
   });
 
   const flush = async () => {
@@ -186,7 +187,7 @@ async function main() {
   process.on('SIGINT', () => stop('cancelled'));
   process.on('SIGTERM', () => stop('cancelled'));
 
-  console.log(`fast mode for ${hours}h`);
+  console.log(`fast mode for ${hours}h, checking every 10s`);
   runner.start();
   setInterval(async () => {
     if (stopping) return;
