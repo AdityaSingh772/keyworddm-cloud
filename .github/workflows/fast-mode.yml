@@ -1,0 +1,26 @@
+# Installed by the KeywordDM app. Started by the app when you start a campaign:
+# checks every 10 seconds for a few hours, while most keyword comments come in.
+name: fast-mode
+on:
+  workflow_dispatch:
+    inputs:
+      hours:
+        description: "How long (max 5.5)"
+        default: "5"
+concurrency:
+  group: keyworddm
+  cancel-in-progress: false
+permissions:
+  contents: write
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 345
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check every 10 seconds
+        run: node src/cloud/cloud.js watch
+        env:
+          HOURS: ${{ inputs.hours }}
+          IG_ACCESS_TOKEN: ${{ secrets.IG_ACCESS_TOKEN }}
+          KDM_KEY: ${{ secrets.KDM_KEY }}
