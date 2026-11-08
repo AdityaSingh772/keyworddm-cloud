@@ -6,7 +6,8 @@ const { checkCampaign, intervalFor, isAuthError, isRateLimited } = require('../e
 
 const LOG_LIMIT = 200;
 
-function createRunner({ store, getApi, onChange, onAuthError, onFirstSend, now = Date.now }) {
+// fixedInterval: check every campaign this often regardless of reel age (fast mode).
+function createRunner({ store, getApi, onChange, onAuthError, onFirstSend, now = Date.now, fixedInterval = null }) {
   let timer = null;
   let busy = false;
   let pauseUntil = 0;
@@ -78,7 +79,7 @@ function createRunner({ store, getApi, onChange, onAuthError, onFirstSend, now =
           addLog(c, 'error', c.stats.lastError);
         }
         recount(c);
-        nextAt.set(c.id, now() + intervalFor(c.reelTimestamp, now()));
+        nextAt.set(c.id, now() + (fixedInterval || intervalFor(c.reelTimestamp, now())));
         await store.save();
         onChange();
       }
