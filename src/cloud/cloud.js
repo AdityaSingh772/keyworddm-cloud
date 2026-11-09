@@ -153,6 +153,7 @@ async function main() {
   let account = null;
   let authFailed = false;
   let lastPrint = fingerprint(state);
+  let lastWrite = Date.now();
 
   const store = {
     campaigns: () => campaigns,
@@ -160,9 +161,12 @@ async function main() {
       state = buildState(state, campaigns, { lastRun: new Date().toISOString(), authError: authFailed || undefined });
       fs.mkdirSync(path.dirname(STATE_PATH), { recursive: true });
       const fp = fingerprint(state);
-      if (fp !== lastPrint || !fs.existsSync(STATE_PATH)) {
+      // Fast mode also saves every 15 minutes with nothing new, so the app can see it's alive.
+      const heartbeat = mode === 'watch' && Date.now() - lastWrite > 15 * 60e3;
+      if (fp !== lastPrint || heartbeat || !fs.existsSync(STATE_PATH)) {
         fs.writeFileSync(STATE_PATH, encrypt(state, key));
         lastPrint = fp;
+        lastWrite = Date.now();
         dirty = true;
       }
     },
