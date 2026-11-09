@@ -22,7 +22,8 @@ function matchesKeyword(text, keyword) {
 }
 
 function parseTs(ts) {
-  // Instagram uses 2026-11-08T21:24:05+0000
+  // Instagram uses 2026-11-08T21:24:05+0000; some endpoints send unix seconds.
+  if (typeof ts === 'number' || /^\d+$/.test(String(ts))) { const n = Number(ts); return n > 1e12 ? n : n * 1000; }
   const t = Date.parse(String(ts).replace(/([+-]\d\d)(\d\d)$/, '$1:$2'));
   return Number.isNaN(t) ? 0 : t;
 }
@@ -135,8 +136,10 @@ async function checkCampaign({ api, account, campaign, now = Date.now(), dryRun 
   const text = buildMessage(campaign.message, campaign.link);
   for (const c of todo) {
     try {
-      await api.post(`${account.id}/messages`, { recipient: { comment_id: c.id }, message: { text } });
+      const res = await api.post(`${account.id}/messages`, { recipient: { comment_id: c.id }, message: { text } });
       campaign.replied[c.id] = new Date(now).toISOString();
+      // Remember who got it, so the same person DMing the keyword isn't sent it twice.
+      if (res && res.recipient_id) (campaign.dmUsers = campaign.dmUsers || {})[res.recipient_id] = new Date(now).toISOString();
       result.sent++;
       log('sent', `DM sent to @${c.username || 'someone'}`);
     } catch (e) {
@@ -169,6 +172,79 @@ async function checkCampaign({ api, account, campaign, now = Date.now(), dryRun 
   return result;
 }
 
+// ---------- keyword sent by DM ----------
+// Instagram sometimes limits a comment so only its author sees it, and no app ever
+// receives it. Those people can DM the keyword instead and still get the link.
+
+const DM_WINDOW_MS = 23 * 3600 * 1000; // Instagram allows replies within 24h of their message
+
+/**
+ * Scan the inbox once for every campaign that answers DMs. A person gets each
+ * campaign's link once. Messages from before the campaign started are ignored.
+ * Throws API errors; the runner decides what to do with them.
+ */
+async function checkDMs({ api, account, campaigns, now = Date.now(), since = 0, save = async () => {},
+  sleep = (ms) => new Promise((r) => setTimeout(r, ms)), log = () => {} }) {
+  const active = campaigns.filter((c) => c.status === 'running' && c.dmKeyword !== false && c.keyword);
+  const result = { conversations: 0, sent: 0 };
+  if (!active.length) return result;
+  // Newest conversations first. Keep paging while they're newer than the last scan
+  // (busy launches, where our own replies also bump conversations to the top).
+  const floor = Math.max(now - DM_WINDOW_MS, (since || 0) - 5 * 60e3);
+  const convs = [];
+  let page = await api.get(`${account.id}/conversations`, {
+    platform: 'instagram', limit: 50,
+    fields: 'updated_time,messages.limit(5){id,message,from,created_time}',
+  });
+  for (let i = 0; i < 6; i++) {
+    const data = page.data || [];
+    convs.push(...data);
+    const last = data[data.length - 1];
+    if (!last || parseTs(last.updated_time) < floor || !(page.paging && page.paging.next)) break;
+    page = await api.get(page.paging.next);
+  }
+  result.conversations = convs.length;
+  // Oldest first, so whoever asked first is answered first.
+  const msgs = [];
+  for (const conv of convs) {
+    if (now - parseTs(conv.updated_time) > DM_WINDOW_MS) continue;
+    for (const m of (conv.messages && conv.messages.data) || []) {
+      const from = m.from || {};
+      if (!from.id || from.id === account.id) continue;
+      if (account.username && String(from.username || '').toLowerCase() === account.username.toLowerCase()) continue;
+      const at = parseTs(m.created_time);
+      if (!at || now - at > DM_WINDOW_MS) continue;
+      msgs.push({ id: m.id, text: m.message || '', at, userId: from.id, username: from.username || '' });
+    }
+  }
+  msgs.sort((a, b) => a.at - b.at);
+  for (const m of msgs) {
+    for (const c of active) {
+      c.replied = c.replied || {};
+      c.dmUsers = c.dmUsers || {};
+      if (c.dmUsers[m.userId] || c.replied[`dm:${m.id}`]) continue;
+      const started = Date.parse(c.createdAt || 0) || 0;
+      if (m.at < started) continue;
+      if (!matchesKeyword(m.text, c.keyword)) continue;
+      const stamp = new Date(now).toISOString();
+      try {
+        await api.post(`${account.id}/messages`, { recipient: { id: m.userId }, message: { text: buildMessage(c.message, c.link) } });
+        c.replied[`dm:${m.id}`] = stamp;
+        result.sent++;
+        log(c, 'sent', `DM sent to @${m.username || 'someone'} (they messaged the keyword)`);
+      } catch (e) {
+        if (isAuthError(e) || isRateLimited(e) || !e.status || e.status >= 500) { await save(); throw e; }
+        c.replied[`dm:${m.id}`] = `error:${e.status}`;
+        log(c, 'skip', `Couldn't reply to @${m.username || 'someone'}'s DM: ${e.apiMessage || e.status}`);
+      }
+      c.dmUsers[m.userId] = stamp;
+      await save();
+      await sleep(1500);
+    }
+  }
+  return result;
+}
+
 /** How often to check, based on how old the reel is. Most keyword comments come early. */
 function intervalFor(reelTimestampMs, now, base = {}) {
   const age = reelTimestampMs ? now - reelTimestampMs : 0;
@@ -180,6 +256,6 @@ function intervalFor(reelTimestampMs, now, base = {}) {
 
 module.exports = {
   matchesKeyword, shortcode, stillInWindow, parseTs, pickComments, buildMessage, pickReply,
-  isAuthError, isRateLimited, isValidLink, findMediaId, fetchRecentComments, checkCampaign,
+  isAuthError, isRateLimited, isValidLink, findMediaId, fetchRecentComments, checkCampaign, checkDMs,
   intervalFor, REPLY_WINDOW_MS,
 };
