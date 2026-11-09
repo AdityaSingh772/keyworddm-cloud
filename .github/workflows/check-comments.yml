@@ -1,19 +1,38 @@
-# Installed by the KeywordDM app. Checks your running campaigns every 5 minutes,
+# Installed by the KeywordDM app. Checks your running campaigns every few minutes,
 # even when your computer is off. Don't edit: the app updates this file.
 name: check-comments
 on:
   schedule:
     - cron: "*/5 * * * *"
   workflow_dispatch: {}
-concurrency:
-  group: keyworddm
-  cancel-in-progress: false
 permissions:
   contents: write
 jobs:
+  # While fast mode is running it already checks every 10 seconds, so this run
+  # steps aside quietly instead of queueing and getting cancelled (which makes
+  # GitHub email "No jobs were run").
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      actions: read
+    outputs:
+      busy: ${{ steps.fast.outputs.busy }}
+    steps:
+      - id: fast
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          n=$(gh run list -R "$GITHUB_REPOSITORY" -w fast-mode --json status -q '[.[] | select(.status != "completed")] | length' 2>/dev/null || echo 0)
+          if [ "${n:-0}" -gt 0 ]; then echo "busy=yes" >> "$GITHUB_OUTPUT"; else echo "busy=no" >> "$GITHUB_OUTPUT"; fi
   check:
+    needs: gate
+    if: needs.gate.outputs.busy != 'yes'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    concurrency:
+      group: keyworddm
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
       - name: Check comments and send DMs
