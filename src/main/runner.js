@@ -2,7 +2,7 @@
 // Runs every active campaign on a schedule while the app is open.
 // One check at a time (never two in parallel), paced by reel age, with backoff when
 // Instagram says we're calling too often. Stops everything if the token is rejected.
-const { checkCampaign, intervalFor, isAuthError, isRateLimited } = require('../engine/engine');
+const { checkCampaign, checkDMs, intervalFor, isAuthError, isRateLimited } = require('../engine/engine');
 
 const LOG_LIMIT = 200;
 
@@ -13,6 +13,9 @@ function createRunner({ store, getApi, onChange, onAuthError, onFirstSend, now =
   let pauseUntil = 0;
   let backoff = 0;
   const nextAt = new Map(); // campaign id -> ms
+  let dmNextAt = 0; // inbox scan for people who DM the keyword
+  let dmLastScan = 0;
+  let dmBackoff = 0;
 
   function addLog(c, kind, text) {
     c.log = c.log || [];
@@ -38,7 +41,9 @@ function createRunner({ store, getApi, onChange, onAuthError, onFirstSend, now =
     const t = now();
     if (t < pauseUntil) return;
     const due = running().filter((c) => (nextAt.get(c.id) || 0) <= t);
-    if (!due.length) return;
+    const dmCampaigns = running().filter((c) => c.dmKeyword !== false);
+    const dmDue = dmCampaigns.length > 0 && dmNextAt <= t;
+    if (!due.length && !dmDue) return;
     busy = true;
     try {
       const { api, account } = await getApi();
@@ -81,6 +86,44 @@ function createRunner({ store, getApi, onChange, onAuthError, onFirstSend, now =
         }
         recount(c);
         nextAt.set(c.id, now() + (fixedInterval || intervalFor(c.reelTimestamp, now())));
+        await store.save();
+        onChange();
+      }
+      if (dmDue && running().some((c) => c.dmKeyword !== false)) {
+        const scanStart = now();
+        const sentBefore = new Map(dmCampaigns.map((c) => [c.id, c.stats.sent || 0]));
+        try {
+          const r = await checkDMs({
+            api, account, campaigns: running(), now: scanStart, since: dmLastScan,
+            save: () => store.save(),
+            log: (c, kind, text) => { addLog(c, kind, text); onChange(); },
+          });
+          dmLastScan = scanStart;
+          dmBackoff = 0;
+          dmNextAt = now() + Math.max(fixedInterval || 60_000, 30_000);
+          for (const c of dmCampaigns) {
+            c.stats.dmError = null;
+            recount(c);
+            if (r.sent && onFirstSend && !sentBefore.get(c.id) && c.stats.sent > 0) onFirstSend(c);
+          }
+        } catch (e) {
+          if (isAuthError(e)) {
+            for (const x of running()) x.status = 'paused';
+            for (const c of dmCampaigns) c.stats.lastError = 'Instagram rejected the access token. Reconnect in Settings.';
+            await store.save();
+            onChange();
+            onAuthError(e);
+            return;
+          }
+          // Never let the inbox scan hold up comment checks: just try it again later.
+          dmBackoff = Math.min(Math.max(dmBackoff * 2, isRateLimited(e) ? 300_000 : 120_000), 1_800_000);
+          dmNextAt = now() + dmBackoff;
+          const msg = `Couldn't read DMs: ${e.apiMessage || e.message || String(e)}`;
+          for (const c of dmCampaigns) {
+            if (c.stats.dmError !== msg) addLog(c, 'error', msg);
+            c.stats.dmError = msg;
+          }
+        }
         await store.save();
         onChange();
       }
