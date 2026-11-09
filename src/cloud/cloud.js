@@ -16,7 +16,7 @@ const ROOT = path.resolve(__dirname, '..', '..');
 const CFG_PATH = path.join(ROOT, 'data', 'campaigns.enc');
 const STATE_PATH = path.join(ROOT, 'data', 'state.enc');
 const LOG_KEEP = 50;
-const CAMPAIGN_FIELDS = ['name', 'reelUrl', 'mediaId', 'reelTimestamp', 'keyword', 'link', 'message', 'publicReply', 'replies', 'status'];
+const CAMPAIGN_FIELDS = ['name', 'reelUrl', 'mediaId', 'reelTimestamp', 'keyword', 'link', 'message', 'publicReply', 'replies', 'status', 'createdAt', 'dmKeyword'];
 
 // ---------- pure helpers (tested) ----------
 
@@ -30,6 +30,7 @@ function mergeCampaigns(config, state, existing = []) {
     const c = live || {
       id: cfg.id,
       replied: mem.replied || {},
+      dmUsers: mem.dmUsers || {},
       prunedSent: mem.prunedSent || 0,
       prunedSkipped: mem.prunedSkipped || 0,
       stats: { sent: 0, skipped: 0, replied: 0, lastCheck: null, lastError: null, ...(mem.stats || {}) },
@@ -56,6 +57,9 @@ function pruneReplied(c, now) {
     const at = Date.parse(isErr ? (c.errorsAt && c.errorsAt[id]) || 0 : v) || 0;
     if (!isErr && at && now - at > PRUNE_AFTER_MS) { delete c.replied[id]; c.prunedSent = (c.prunedSent || 0) + 1; }
   }
+  for (const [id, v] of Object.entries(c.dmUsers || {})) {
+    if (now - (Date.parse(v) || 0) > PRUNE_AFTER_MS) delete c.dmUsers[id];
+  }
 }
 
 function buildState(prev, campaigns, extra = {}, now = Date.now()) {
@@ -66,6 +70,7 @@ function buildState(prev, campaigns, extra = {}, now = Date.now()) {
       mediaId: c.mediaId,
       reelTimestamp: c.reelTimestamp,
       replied: c.replied,
+      dmUsers: c.dmUsers || {},
       prunedSent: c.prunedSent || 0,
       prunedSkipped: c.prunedSkipped || 0,
       stats: c.stats,
@@ -232,7 +237,7 @@ async function main() {
   }, 20_000);
 
   function report() {
-    for (const c of campaigns) console.log(`${c.keyword}: ${c.stats.sent} sent, ${c.stats.skipped} skipped${c.stats.lastError ? `, last error: ${c.stats.lastError}` : ''}`);
+    for (const c of campaigns) console.log(`${c.keyword}: ${c.stats.sent} sent, ${c.stats.skipped} skipped${c.stats.lastError ? `, last error: ${c.stats.lastError}` : ''}${c.stats.dmError ? `, ${c.stats.dmError}` : ''}`);
   }
 }
 
