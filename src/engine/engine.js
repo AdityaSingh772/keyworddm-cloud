@@ -59,7 +59,7 @@ function pickComments(comments, keyword, ownUsername, doneIds, now) {
     if (!matchesKeyword(c.text, keyword)) continue;
     out.push(c);
   }
-  return out.reverse(); // oldest first, so early commenters are answered first
+  return out.sort((a, b) => parseTs(a.timestamp) - parseTs(b.timestamp)); // oldest first, so early commenters are answered first
 }
 
 /** Replace {link} in the message; append the link if the placeholder is missing. */
@@ -100,10 +100,14 @@ async function findMediaId(api, igId, reelUrl) {
 
 async function fetchRecentComments(api, mediaId, now) {
   const comments = [];
-  let page = await api.get(`${mediaId}/comments`, { fields: 'id,text,timestamp,username', limit: 50 });
+  // Replies under other comments count too (people often reply TEST under a pinned comment).
+  let page = await api.get(`${mediaId}/comments`, { fields: 'id,text,timestamp,username,replies{id,text,timestamp,username}', limit: 50 });
   for (let i = 0; i < MAX_PAGES; i++) {
     const data = page.data || [];
-    comments.push(...data);
+    for (const c of data) {
+      comments.push(c);
+      for (const r of (c.replies && c.replies.data) || []) comments.push(r);
+    }
     if (data.length && !stillInWindow(data[data.length - 1].timestamp, now)) break;
     const next = page.paging && page.paging.next;
     if (!next) break;
