@@ -14,11 +14,22 @@ function escapeRegex(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-/** Whole-word, case-insensitive. "test" matches "TEST pls" but not "testing". */
+/** A campaign's keyword field can hold several words separated by commas: "JOB, AI, SCORE". */
+function keywordList(keyword) {
+  const seen = new Set();
+  return String(keyword || '').split(',').map((k) => k.trim()).filter((k) => {
+    const low = k.toLowerCase();
+    if (!k || seen.has(low)) return false;
+    seen.add(low);
+    return true;
+  });
+}
+
+/** Whole-word, case-insensitive, any of the keywords. "test" matches "TEST pls" but not "testing". */
 function matchesKeyword(text, keyword) {
-  const kw = String(keyword || '').trim();
-  if (!kw) return false;
-  return new RegExp(`(^|[^\\p{L}\\p{N}_])${escapeRegex(kw)}($|[^\\p{L}\\p{N}_])`, 'iu').test(String(text || ''));
+  const t = String(text || '');
+  return keywordList(keyword).some((kw) =>
+    new RegExp(`(^|[^\\p{L}\\p{N}_])${escapeRegex(kw)}($|[^\\p{L}\\p{N}_])`, 'iu').test(t));
 }
 
 function parseTs(ts) {
@@ -264,7 +275,7 @@ function intervalFor(reelTimestampMs, now, base = {}) {
 }
 
 module.exports = {
-  matchesKeyword, shortcode, stillInWindow, parseTs, pickComments, buildMessage, pickReply,
+  matchesKeyword, keywordList, shortcode, stillInWindow, parseTs, pickComments, buildMessage, pickReply,
   isAuthError, isRateLimited, isValidLink, findMediaId, fetchRecentComments, checkCampaign, checkDMs,
   intervalFor, REPLY_WINDOW_MS,
 };
