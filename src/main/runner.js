@@ -120,7 +120,8 @@ function createRunner({ store, getApi, onChange, onAuthError, onFirstSend, now =
           dmNextAt = now() + dmBackoff;
           const msg = `Couldn't read DMs: ${e.apiMessage || e.message || String(e)}`;
           for (const c of dmCampaigns) {
-            if (c.stats.dmError !== msg) addLog(c, 'error', msg);
+            const quiet = c.stats.dmError === msg && now() - (Date.parse(c.stats.dmErrorAt || 0) || 0) < 6 * 3600e3;
+            if (!quiet) { addLog(c, 'error', msg); c.stats.dmErrorAt = new Date(now()).toISOString(); }
             c.stats.dmError = msg;
           }
         }
