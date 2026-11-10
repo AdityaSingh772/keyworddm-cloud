@@ -177,6 +177,7 @@ async function checkCampaign({ api, account, campaign, now = Date.now(), dryRun 
 // receives it. Those people can DM the keyword instead and still get the link.
 
 const DM_WINDOW_MS = 23 * 3600 * 1000; // Instagram allows replies within 24h of their message
+const MAX_DM_CONVERSATIONS = 40; // per scan; the rest are picked up on the next one
 
 /**
  * Scan the inbox once for every campaign that answers DMs. A person gets each
@@ -188,20 +189,24 @@ async function checkDMs({ api, account, campaigns, now = Date.now(), since = 0, 
   const active = campaigns.filter((c) => c.status === 'running' && c.dmKeyword !== false && c.keyword);
   const result = { conversations: 0, sent: 0 };
   if (!active.length) return result;
-  // Newest conversations first. Keep paging while they're newer than the last scan
-  // (busy launches, where our own replies also bump conversations to the top).
+  // Step 1: the newest conversations, just ids and times (cheap). Keep paging while
+  // they're newer than the last scan (busy launches, where our own replies also bump
+  // conversations to the top).
   const floor = Math.max(now - DM_WINDOW_MS, (since || 0) - 5 * 60e3);
-  const convs = [];
-  let page = await api.get(`${account.id}/conversations`, {
-    platform: 'instagram', limit: 50,
-    fields: 'updated_time,messages.limit(5){id,message,from,created_time}',
-  });
-  for (let i = 0; i < 6; i++) {
+  const recent = [];
+  let page = await api.get(`${account.id}/conversations`, { platform: 'instagram', fields: 'updated_time', limit: 25 });
+  for (let i = 0; i < 4; i++) {
     const data = page.data || [];
-    convs.push(...data);
+    recent.push(...data.filter((cv) => parseTs(cv.updated_time) >= floor));
     const last = data[data.length - 1];
     if (!last || parseTs(last.updated_time) < floor || !(page.paging && page.paging.next)) break;
     page = await api.get(page.paging.next);
+  }
+  // Step 2: the last few messages of each conversation that changed.
+  const convs = [];
+  for (const cv of recent.slice(0, MAX_DM_CONVERSATIONS)) {
+    const full = await api.get(cv.id, { fields: 'messages.limit(3){id,message,from,created_time}' });
+    convs.push({ ...cv, messages: full.messages });
   }
   result.conversations = convs.length;
   // Oldest first, so whoever asked first is answered first.
